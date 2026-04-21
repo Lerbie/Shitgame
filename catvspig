@@ -7,63 +7,69 @@ import time
 from typing import List
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-WIDTH, HEIGHT = 1080, 540          # game world size (unchanged)
-UI_HEIGHT = 220                    # extra space at bottom for thumb-friendly buttons
-WINDOW_HEIGHT = HEIGHT + UI_HEIGHT # actual window height
+WIDTH, HEIGHT  = 1080, 540
+FPS            = 60
+GRAVITY        = 0.85
+JUMP_POWER     = -17
+MOVE_SPEED     = 4.0
+NAV_H          = 80
+SPAWN_INTERVAL = 5000          # ms between auto-spawn cycles
 
-FPS           = 60
-GRAVITY       = 0.85
-JUMP_POWER    = -17
-MOVE_SPEED    = 4.0
-NAV_H         = 80
+HEALTH_BAR_W = 72
+HEALTH_BAR_H = 10
 
-# Health bar is now ONE consistent value (small, matches sprite width)
-HEALTH_BAR_W  = 72
-HEALTH_BAR_H  = 10
+# City generation scaling (reference 900×1100)
+BASE_WIDTH  = 900
+BASE_HEIGHT = 1100
+w_scale = WIDTH  / BASE_WIDTH
+h_scale = HEIGHT / BASE_HEIGHT
 
 # ─── COLOURS ──────────────────────────────────────────────────────────────────
-WHITE      = (255, 255, 255)
-BLACK      = (0,   0,   0)
-RED        = (220,  50,  50)
-GREEN      = (50,  200,  80)
-DARK_GREEN = (30,  140,  50)
-YELLOW     = (255, 220,  50)
-BLUE       = (80,  130, 220)
-ORANGE     = (255, 140,  30)
-BG_TOP     = (135, 180, 255)
-BG_BOT     = (120, 200,  90)
-GREY       = (160, 160, 160)
-DARK       = (30,   30,  50)
-PLAT_TOP   = (80,   60,  40)
-PLAT_SIDE  = (50,   35,  20)
-GORE_LIFETIME = 3.0   # seconds gore pieces linger
+WHITE  = (255, 255, 255)
+BLACK  = (0,   0,   0)
+RED    = (220,  50,  50)
+GREEN  = (50,  200,  80)
+YELLOW = (255, 220,  50)
+GREY   = (160, 160, 160)
+DARK   = (30,   30,  50)
+ORANGE = (255, 140,  30)
 
-# Global templates (kept for clarity / fallback — never used after this change)
+SKY_COLOR       = (55, 55, 60)
+BUILDING_COLORS = [(20, 20, 22), (30, 30, 32), (40, 40, 45), (60, 60, 65)]
+WINDOW_COLORS   = [(120, 115, 100), (140, 135, 115), (100, 100, 90)]
+
+GORE_LIFETIME = 3.0
+
 CAT_STATS = dict(
-    strength=random.randint(1, 6),
-    defense=random.randint(1, 6),
-    speed=random.randint(1, 9),
-    stamina=random.randint(1, 9),
-    health=random.randint(6,9),
+    strength=random.randint(1, 6), defense=random.randint(1, 6),
+    speed=random.randint(1, 9),    stamina=random.randint(1, 9),
+    health=random.randint(6, 9),
 )
-
 PIG_STATS = dict(
-    strength=random.randint(1, 9),
-    defense=random.randint(1, 9),
-    speed=random.randint(1, 6),
-    stamina=random.randint(1, 6),
-    health=random.randint(6,9),
+    strength=random.randint(1, 9), defense=random.randint(1, 9),
+    speed=random.randint(1, 6),    stamina=random.randint(1, 6),
+    health=random.randint(6, 9),
 )
 
 # ─── INIT ─────────────────────────────────────────────────────────────────────
 pygame.init()
-screen = pygame.display.set_mode((WIDTH, WINDOW_HEIGHT))   # taller window
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Cat & Pig Adventure")
 clock = pygame.time.Clock()
 
 font_big   = pygame.font.SysFont("monospace", 28, bold=True)
 font_med   = pygame.font.SysFont("monospace", 20, bold=True)
 font_small = pygame.font.SysFont("monospace", 14, bold=True)
+
+# ─── GRAYSCALE HELPER ─────────────────────────────────────────────────────────
+def to_grayscale(surf):
+    gs = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    for px in range(surf.get_width()):
+        for py in range(surf.get_height()):
+            col  = surf.get_at((px, py))
+            gray = int(col.r * 0.299 + col.g * 0.587 + col.b * 0.114)
+            gs.set_at((px, py), (gray, gray, gray, col.a))
+    return gs
 
 # ─── SPRITE LOADER ────────────────────────────────────────────────────────────
 def load_sprite(path, target_h):
@@ -77,76 +83,117 @@ def load_sprite(path, target_h):
         col  = (100, 180, 255) if "cat" in path else (255, 160, 80)
         pygame.draw.rect(surf, col, surf.get_rect(), border_radius=10)
         lbl = font_small.render("CAT" if "cat" in path else "PIG", True, BLACK)
-        surf.blit(lbl, (target_h//2 - lbl.get_width()//2,
-                        target_h//2 - lbl.get_height()//2))
+        surf.blit(lbl, (target_h // 2 - lbl.get_width() // 2,
+                        target_h // 2 - lbl.get_height() // 2))
         return surf
 
 sp = "sprites"
+
 def _try(name, fallback, h):
     p = os.path.join(sp, name)
     return load_sprite(p, h) if os.path.exists(p) \
            else load_sprite(os.path.join(sp, fallback), h)
 
-cat_nav_idle = load_sprite(os.path.join(sp, "cat.png"),     NAV_H)
-cat_nav_walk = load_sprite(os.path.join(sp, "catwalk.png"), NAV_H)
-cat_nav_jump = load_sprite(os.path.join(sp, "catjump.png"), NAV_H)
-pig_nav_idle = load_sprite(os.path.join(sp, "pig.png"),     NAV_H)
-pig_nav_walk = _try("pigwalk.png", "pig.png", NAV_H)
-pig_nav_jump = _try("pigjump.png", "pig.png", NAV_H)
+cat_nav_idle = to_grayscale(load_sprite(os.path.join(sp, "cat.png"),     NAV_H))
+cat_nav_walk = to_grayscale(load_sprite(os.path.join(sp, "catwalk.png"), NAV_H))
+cat_nav_jump = to_grayscale(load_sprite(os.path.join(sp, "catjump.png"), NAV_H))
+pig_nav_idle = to_grayscale(load_sprite(os.path.join(sp, "pig.png"),     NAV_H))
+pig_nav_walk = to_grayscale(_try("pigwalk.png", "pig.png", NAV_H))
+pig_nav_jump = to_grayscale(_try("pigjump.png", "pig.png", NAV_H))
 
 BH = NAV_H
-cat_b_idle   = load_sprite(os.path.join(sp, "cat.png"),       BH)
-cat_b_stance = load_sprite(os.path.join(sp, "catstance.png"), BH)
-cat_b_punch  = load_sprite(os.path.join(sp, "catpunch.png"),  BH)
-cat_b_flinch = load_sprite(os.path.join(sp, "catflinch.png"), BH)
-pig_b_idle   = load_sprite(os.path.join(sp, "pig.png"),       BH)
-pig_b_stance = load_sprite(os.path.join(sp, "pigstance.png"), BH)
-pig_b_punch  = load_sprite(os.path.join(sp, "pigpunch.png"),  BH)
-pig_b_flinch = load_sprite(os.path.join(sp, "pigflinch.png"), BH)
+cat_b_idle   = to_grayscale(load_sprite(os.path.join(sp, "cat.png"),       BH))
+cat_b_stance = to_grayscale(load_sprite(os.path.join(sp, "catstance.png"), BH))
+cat_b_punch  = to_grayscale(load_sprite(os.path.join(sp, "catpunch.png"),  BH))
+cat_b_flinch = to_grayscale(load_sprite(os.path.join(sp, "catflinch.png"), BH))
+pig_b_idle   = to_grayscale(load_sprite(os.path.join(sp, "pig.png"),       BH))
+pig_b_stance = to_grayscale(load_sprite(os.path.join(sp, "pigstance.png"), BH))
+pig_b_punch  = to_grayscale(load_sprite(os.path.join(sp, "pigpunch.png"),  BH))
+pig_b_flinch = to_grayscale(load_sprite(os.path.join(sp, "pigflinch.png"), BH))
 
 pig_b_idle_f   = pygame.transform.flip(pig_b_idle,   True, False)
 pig_b_stance_f = pygame.transform.flip(pig_b_stance, True, False)
 pig_b_punch_f  = pygame.transform.flip(pig_b_punch,  True, False)
 pig_b_flinch_f = pygame.transform.flip(pig_b_flinch, True, False)
 
-# ─── PLATFORMS ────────────────────────────────────────────────────────────────
-FLOOR_Y = 470
-platforms = [
-    pygame.Rect(0,     FLOOR_Y, WIDTH, 70),   # 0 = floor
-    pygame.Rect(-20,   80, 20, HEIGHT),        # 1 = left wall
-    pygame.Rect(WIDTH, 80, 20, HEIGHT),        # 2 = right wall
-    pygame.Rect(150,  360, 110, 18),
-    pygame.Rect(340,  290, 110, 18),
-    pygame.Rect(530,  360, 110, 18),
-]
+# ─── PLATFORMS & BACKGROUND (populated before game loop in main) ───────────────
+platforms  = []
+bg_surface = None
+
+# ─── CITY GENERATION ──────────────────────────────────────────────────────────
+def draw_building(surface, x, base_y, width, height):
+    color = random.choice(BUILDING_COLORS)
+    pygame.draw.rect(surface, color, pygame.Rect(x, base_y - height, width, height))
+
+    window_size = random.randint(max(2, int(3 * w_scale)), max(2, int(5 * w_scale)))
+    spacing     = window_size + random.randint(max(1, int(2 * w_scale)), max(2, int(4 * w_scale)))
+    for wx in range(x + max(3, int(5 * w_scale)), x + width - window_size, spacing):
+        for wy in range(base_y - height + max(3, int(5 * w_scale)),
+                        base_y - max(3, int(5 * w_scale)), spacing):
+            if random.random() > 0.20:
+                pygame.draw.rect(surface, random.choice(WINDOW_COLORS),
+                                 (wx, wy, window_size, window_size))
+
+    top_y = base_y - height
+    if random.random() < 0.28:
+        roof_h      = random.randint(int(20 * h_scale), int(55 * h_scale))
+        peak_offset = random.randint(int(10 * w_scale),
+                                     max(int(10 * w_scale), width - int(10 * w_scale)))
+        pygame.draw.polygon(surface, color,
+                            [(x, top_y), (x + width, top_y),
+                             (x + peak_offset, top_y - roof_h)])
+    else:
+        if random.random() < 0.32:
+            spire_bw = int(width * random.uniform(0.55, 0.85))
+            spire_x  = x + (width - spire_bw) // 2
+            t1h = random.randint(int(22 * h_scale), int(48 * h_scale))
+            pygame.draw.rect(surface, color, (spire_x, top_y - t1h, spire_bw, t1h))
+            t2w = int(spire_bw * random.uniform(0.60, 0.82))
+            t2x = x + (width - t2w) // 2
+            t2h = random.randint(int(18 * h_scale), int(40 * h_scale))
+            pygame.draw.rect(surface, color, (t2x, top_y - t1h - t2h, t2w, t2h))
+            sw  = random.randint(max(2, int(3 * w_scale)), max(3, int(7 * w_scale)))
+            sx  = x + (width - sw) // 2
+            sh  = random.randint(int(65 * h_scale), int(195 * h_scale))
+            pygame.draw.rect(surface, color,
+                             (sx, top_y - t1h - t2h - sh, sw, sh))
+
+    return pygame.Rect(x, base_y - height, width, 8)   # roof platform
+
+
+def draw_layer(surface, y_base, min_h, max_h):
+    roofs = []
+    x = 0
+    while x < WIDTH:
+        w = random.randint(int(42 * w_scale), int(135 * w_scale))
+        h = random.randint(min_h, max_h)
+        roofs.append(draw_building(surface, x, y_base, w, h))
+        x += w - random.randint(int(9 * w_scale), int(34 * w_scale))
+    return roofs
+
+
+def generate_city():
+    surface = pygame.Surface((WIDTH, HEIGHT))
+    surface.fill(SKY_COLOR)
+    roofs = draw_layer(surface, HEIGHT, int(260 * h_scale), int(820 * h_scale))
+    plats = [
+        pygame.Rect(-20,    0, 20,     HEIGHT),   # 0: left wall
+        pygame.Rect(WIDTH,  0, 20,     HEIGHT),   # 1: right wall
+        pygame.Rect(0, HEIGHT - 2, WIDTH, 2),     # 2: floor safety net
+        *roofs,                                    # 3+: building rooftops
+    ]
+    return surface, plats
 
 # ─── DRAW HELPERS ─────────────────────────────────────────────────────────────
 def draw_bg():
-    for y in range(HEIGHT):                    # only the game area
-        t = y / HEIGHT
-        if t < 0.60:
-            pygame.draw.line(screen, BG_TOP, (0, y), (WIDTH, y))
-        else:
-            tt = (t - 0.60) / 0.40
-            r = int(BG_TOP[0]*(1-tt) + BG_BOT[0]*tt)
-            g = int(BG_TOP[1]*(1-tt) + BG_BOT[1]*tt)
-            b = int(BG_TOP[2]*(1-tt) + BG_BOT[2]*tt)
-            pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
-
-def draw_platforms():
-    pygame.draw.rect(screen, DARK_GREEN, (0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y))
-    for p in platforms[3:]:
-        pygame.draw.rect(screen, PLAT_TOP, p)
-        side = pygame.Rect(p.x, p.y + 6, p.w, p.h - 6)
-        pygame.draw.rect(screen, PLAT_SIDE, side)
-        pygame.draw.rect(screen, BLACK, p, 1)
+    screen.blit(bg_surface, (0, 0))
 
 def draw_health_bar(x, y, w, h, current, maximum, name):
     ratio  = max(0.0, current / maximum)
     colour = GREEN if ratio > 0.5 else (YELLOW if ratio > 0.25 else RED)
-    pygame.draw.rect(screen, DARK,   (x-2, y-2, w+4, h+4), border_radius=4)
-    pygame.draw.rect(screen, GREY,   (x,   y,   w,   h),   border_radius=4)
-    pygame.draw.rect(screen, colour, (x,   y,   int(w*ratio), h), border_radius=4)
+    pygame.draw.rect(screen, DARK,   (x - 2, y - 2, w + 4, h + 4), border_radius=4)
+    pygame.draw.rect(screen, GREY,   (x,     y,      w,     h),     border_radius=4)
+    pygame.draw.rect(screen, colour, (x,     y,      int(w * ratio), h), border_radius=4)
     if name:
         txt = font_small.render(f"{name}  HP:{current:.1f}/{maximum}", True, WHITE)
         screen.blit(txt, (x, y - 18))
@@ -155,7 +202,7 @@ def draw_health_bar(x, y, w, h, current, maximum, name):
 def get_platform_index(rect):
     probe = pygame.Rect(rect.x + 4, rect.bottom, rect.w - 8, 4)
     for i, p in enumerate(platforms):
-        if i in (1, 2):
+        if i in (0, 1):          # skip left/right walls
             continue
         if probe.colliderect(p):
             return i
@@ -166,48 +213,39 @@ def should_start_battle(cat_rect, pig_rect):
     pi = get_platform_index(pig_rect)
     if ci == -1 or pi == -1 or ci != pi:
         return False
-    x_touching = cat_rect.right >= pig_rect.left and pig_rect.right >= cat_rect.left
-    return x_touching
+    return cat_rect.right >= pig_rect.left and pig_rect.right >= cat_rect.left
 
 def still_on_same_platform(cat_rect, pig_rect):
     ci = get_platform_index(cat_rect)
     pi = get_platform_index(pig_rect)
     return ci != -1 and ci == pi
 
-# ─── COMBAT PRE-CALCULATION (Initiative via hit% roll) ────────────────────────
+# ─── COMBAT PRE-CALCULATION ───────────────────────────────────────────────────
 def calculate_fight(cat_start_hp=None, pig_start_hp=None, cat_stats=None, pig_stats=None):
     cs = dict(cat_stats) if cat_stats is not None else dict(CAT_STATS)
     ps = dict(pig_stats) if pig_stats is not None else dict(PIG_STATS)
-    
+
     cat_hp  = float(cat_start_hp) if cat_start_hp is not None else float(cs["health"])
     pig_hp  = float(pig_start_hp) if pig_start_hp is not None else float(ps["health"])
     cat_max = float(cs["health"])
     pig_max = float(ps["health"])
-    
     events  = []
 
-    # === NEW INITIATIVE SYSTEM ===
     cat_speed = cs["speed"]
     pig_speed = ps["speed"]
-    
-    cat_hit_chance = round(cat_speed / (cat_speed + pig_speed) * 100)
-    pig_hit_chance = round(pig_speed / (cat_speed + pig_speed) * 100)
-    
-    cat_initiative_success = random.randint(1, 100) <= cat_hit_chance
-    pig_initiative_success = random.randint(1, 100) <= pig_hit_chance
+    cat_hit   = round(cat_speed / (cat_speed + pig_speed) * 100)
+    pig_hit   = round(pig_speed / (cat_speed + pig_speed) * 100)
 
-    if cat_initiative_success and not pig_initiative_success:
-        first = "cat"
-    elif pig_initiative_success and not cat_initiative_success:
-        first = "pig"
-    else:
-        # Both succeed or both fail → fall back to raw speed (tiebreaker)
-        first = "cat" if cat_speed >= pig_speed else "pig"
+    cat_init = random.randint(1, 100) <= cat_hit
+    pig_init = random.randint(1, 100) <= pig_hit
+
+    if   cat_init and not pig_init: first = "cat"
+    elif pig_init and not cat_init: first = "pig"
+    else:                           first = "cat" if cat_speed >= pig_speed else "pig"
 
     order = ([("cat", cs, ps), ("pig", ps, cs)] if first == "cat"
              else [("pig", ps, cs), ("cat", cs, ps)])
 
-    # Rest of the fight simulation stays exactly the same
     for _ in range(30):
         if cat_hp <= 0 or pig_hp <= 0:
             break
@@ -218,24 +256,16 @@ def calculate_fight(cat_start_hp=None, pig_start_hp=None, cat_stats=None, pig_st
             strikes    = round(atk["stamina"] / dfn["stamina"]) + 1
             hit_chance = round(atk["speed"] / (atk["speed"] + dfn["speed"]) * 100)
             damage     = atk["strength"] / dfn["defense"]
-
             for _ in range(strikes):
                 if cat_hp <= 0 or pig_hp <= 0:
                     break
                 hit = random.randint(1, 100) <= hit_chance
                 if hit:
-                    if dname == "pig":
-                        pig_hp = round(pig_hp - damage, 2)
-                    else:
-                        cat_hp = round(cat_hp - damage, 2)
-                events.append({
-                    "attacker": aname,
-                    "defender": dname,
-                    "hit": hit,
-                    "damage": damage if hit else 0,
-                    "cat_hp": cat_hp,
-                    "pig_hp": pig_hp
-                })
+                    if dname == "pig": pig_hp = round(pig_hp - damage, 2)
+                    else:              cat_hp  = round(cat_hp - damage, 2)
+                events.append({"attacker": aname, "defender": dname, "hit": hit,
+                               "damage": damage if hit else 0,
+                               "cat_hp": cat_hp, "pig_hp": pig_hp})
 
     if   cat_hp <= 0 and pig_hp <= 0: winner = "draw"
     elif cat_hp <= 0:                  winner = "pig"
@@ -243,7 +273,8 @@ def calculate_fight(cat_start_hp=None, pig_start_hp=None, cat_stats=None, pig_st
     else:                              winner = "draw"
 
     return events, winner, cat_max, pig_max
-# ─── GORE + EXPLOSION SYSTEM ──────────────────────────────────────────────────
+
+# ─── GORE + EXPLOSION ─────────────────────────────────────────────────────────
 class GorePiece:
     def __init__(self, image, x, y):
         self.image      = image
@@ -255,49 +286,39 @@ class GorePiece:
         self.spawn_time = time.time()
         self.lifetime   = GORE_LIFETIME
 
-    def update(self, platforms):
+    def update(self, plats):
         if self.is_dead():
             return
         self.vy += 0.78
         self.rect.x += int(self.vx)
         self.rect.y += int(self.vy)
-        self.vx *= 0.975
+        self.vx      *= 0.975
         self.rotation = (self.rotation + self.rot_speed) % 360
-
-        for p in platforms:
+        for p in plats:
             if self.rect.colliderect(p):
                 if self.vx > 0 and self.rect.right > p.left:
-                    self.rect.right = p.left
-                    self.vx *= -0.65
+                    self.rect.right = p.left; self.vx *= -0.65
                 elif self.vx < 0 and self.rect.left < p.right:
-                    self.rect.left = p.right
-                    self.vx *= -0.65
+                    self.rect.left = p.right; self.vx *= -0.65
                 if self.vy > 0 and self.rect.bottom > p.top:
-                    self.rect.bottom = p.top
-                    self.vy *= -0.48
-                    self.vx *= 0.82
-                    if abs(self.vy) < 1.2:
-                        self.vy = 0
+                    self.rect.bottom = p.top; self.vy *= -0.48; self.vx *= 0.82
+                    if abs(self.vy) < 1.2: self.vy = 0
                 elif self.vy < 0 and self.rect.top < p.bottom:
-                    self.rect.top = p.bottom
-                    self.vy *= -0.4
+                    self.rect.top = p.bottom; self.vy *= -0.4
 
     def is_dead(self) -> bool:
         if time.time() - self.spawn_time > self.lifetime:
             return True
-        if (self.rect.right < 0 or self.rect.left > WIDTH or
-                self.rect.bottom < 0 or self.rect.top > HEIGHT):
-            return True
-        return False
+        return (self.rect.right < 0 or self.rect.left > WIDTH or
+                self.rect.bottom < 0 or self.rect.top > HEIGHT)
 
-    def draw(self, screen):
+    def draw(self, surface):
         if self.is_dead():
             return
         rotated  = pygame.transform.rotate(self.image, self.rotation)
         new_rect = rotated.get_rect(center=self.rect.center)
-        screen_rect = pygame.Rect(0, 0, WIDTH, HEIGHT)
-        if new_rect.colliderect(screen_rect):
-            screen.blit(rotated, new_rect)
+        if new_rect.colliderect(pygame.Rect(0, 0, WIDTH, HEIGHT)):
+            surface.blit(rotated, new_rect)
 
 
 class Explosion:
@@ -317,28 +338,25 @@ class Explosion:
             dx   = obj.rect.centerx - self.x
             dy   = obj.rect.centery - self.y
             dist = math.hypot(dx, dy)
-            if dist < self.radius and dist > 0:
-                force  = (self.max_radius - dist) / self.max_radius
-                nx     = dx / dist
-                ny     = dy / dist
-                obj.vx += nx * force * 9.5
-                obj.vy += ny * force * 13.5
+            if 0 < dist < self.radius:
+                force   = (self.max_radius - dist) / self.max_radius
+                obj.vx += (dx / dist) * force * 9.5
+                obj.vy += (dy / dist) * force * 13.5
 
-    def draw(self, screen):
+    def draw(self, surface):
         if not self.alive:
             return
         r = int(self.radius)
         cx, cy = int(self.x), int(self.y)
         if cx + r < 0 or cx - r > WIDTH or cy + r < 0 or cy - r > HEIGHT:
             return
-        old_clip = screen.get_clip()
-        screen.set_clip(pygame.Rect(0, 0, WIDTH, HEIGHT))
-        pygame.draw.circle(screen, (255, 140, 30), (cx, cy), r, 3)
-        pygame.draw.circle(screen, (255, 80, 20),  (cx, cy), int(self.radius * 0.6), 2)
-        screen.set_clip(old_clip)
+        old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(0, 0, WIDTH, HEIGHT))
+        pygame.draw.circle(surface, (255, 140, 30), (cx, cy), r, 3)
+        pygame.draw.circle(surface, (255,  80, 20), (cx, cy), int(self.radius * 0.6), 2)
+        surface.set_clip(old_clip)
 
 
-# ─── GORE SPRITES ─────────────────────────────────────────────────────────────
 def _load_gore_imgs():
     sizes = [(14, 14), (24, 24), (14, 14), (20, 20)]
     imgs  = []
@@ -356,23 +374,20 @@ def _load_gore_imgs():
 GORE_IMGS = _load_gore_imgs()
 
 def spawn_gore(cx, cy, count=10) -> List[GorePiece]:
-    pieces = []
-    for _ in range(count):
-        img = random.choice(GORE_IMGS)
-        ox  = cx + random.randint(-25, 25)
-        oy  = cy + random.randint(-20, 20)
-        pieces.append(GorePiece(img, ox, oy))
-    return pieces
+    return [GorePiece(random.choice(GORE_IMGS),
+                      cx + random.randint(-25, 25),
+                      cy + random.randint(-20, 20))
+            for _ in range(count)]
 
 
-# ─── NAVIGATOR (now generates unique random stats on every spawn) ─────────────
+# ─── NAVIGATOR ────────────────────────────────────────────────────────────────
 class Navigator:
     def __init__(self, x, idle, walk, jump, face_right=True, is_cat=True):
         self.idle_spr     = idle
         self.walk_spr     = walk
         self.jump_spr     = jump
         h, w              = idle.get_height(), idle.get_width()
-        self.rect         = pygame.Rect(x, FLOOR_Y - h, w, h)
+        self.rect         = pygame.Rect(x, -h, w, h)   # above screen; falls in under gravity
         self.vel_x        = 0.0
         self.vel_y        = 0.0
         self.on_ground    = False
@@ -383,30 +398,19 @@ class Navigator:
         self.show_walk    = False
         self.cur_spr      = idle
 
-        # ── UNIQUE RANDOM STATS PER CHARACTER ───────────────────────────────
         if is_cat:
-            self.stats = dict(
-                strength=random.randint(1, 3),
-                defense=random.randint(1, 3),
-                speed=random.randint(3, 6),
-                stamina=random.randint(3, 6),
-                health=random.randint(3,6),
-            )
+            self.stats = dict(strength=random.randint(1, 3), defense=random.randint(1, 3),
+                              speed=random.randint(3, 6),    stamina=random.randint(3, 6),
+                              health=random.randint(3, 6))
         else:
-            self.stats = dict(
-                strength=random.randint(3, 6),
-                defense=random.randint(3, 6),
-                speed=random.randint(1, 3),
-                stamina=random.randint(1, 3),
-                health=random.randint(3,6),
-            )
+            self.stats = dict(strength=random.randint(3, 6), defense=random.randint(3, 6),
+                              speed=random.randint(1, 3),    stamina=random.randint(1, 3),
+                              health=random.randint(3, 6))
         self.hp_max = float(self.stats["health"])
         self.hp     = float(self.stats["health"])
 
     def is_visible(self) -> bool:
-        """Return True only if any part of the sprite overlaps the visible game area (0,0,WIDTH,HEIGHT)."""
-        screen_rect = pygame.Rect(0, 0, WIDTH, HEIGHT)
-        return self.rect.colliderect(screen_rect)
+        return self.rect.colliderect(pygame.Rect(0, 0, WIDTH, HEIGHT))
 
     def ai_tick(self):
         if not self.on_ground:
@@ -475,7 +479,7 @@ class Navigator:
         screen.blit(img, self.rect.topleft)
 
 
-# ─── BATTLE PHASE ─────────────────────────────────────────────────────────────
+# ─── BATTLE ───────────────────────────────────────────────────────────────────
 class InWorldBattle:
     STEP_DELAY      = 300
     STANCE_FRAME_MS = 50
@@ -484,27 +488,22 @@ class InWorldBattle:
     def __init__(self, cat: Navigator, pig: Navigator):
         self.cat = cat
         self.pig = pig
-
         cat.vel_x = 0.0
         pig.vel_x = 0.0
 
-        # Use each character's own unique stats
         events, winner, _, _ = calculate_fight(
-            cat_start_hp=cat.hp,
-            pig_start_hp=pig.hp,
-            cat_stats=cat.stats,
-            pig_stats=pig.stats
-        )
-        self.events     = events
-        self.winner     = winner
-        self.cat_max    = cat.hp_max
-        self.pig_max    = pig.hp_max
-        self.cat_hp     = cat.hp
-        self.pig_hp     = pig.hp
+            cat_start_hp=cat.hp, pig_start_hp=pig.hp,
+            cat_stats=cat.stats, pig_stats=pig.stats)
+        self.events    = events
+        self.winner    = winner
+        self.cat_max   = cat.hp_max
+        self.pig_max   = pig.hp_max
+        self.cat_hp    = cat.hp
+        self.pig_hp    = pig.hp
 
-        self.event_idx  = -1
-        self.timer      = 0
-        self.state      = "fighting"
+        self.event_idx    = -1
+        self.timer        = 0
+        self.state        = "fighting"
 
         self.cat_override = None
         self.pig_override = None
@@ -523,11 +522,9 @@ class InWorldBattle:
 
     def _face_each_other(self):
         if self.cat.rect.centerx <= self.pig.rect.centerx:
-            self.cat.facing_right = True
-            self.pig.facing_right = False
+            self.cat.facing_right = True;  self.pig.facing_right = False
         else:
-            self.cat.facing_right = False
-            self.pig.facing_right = True
+            self.cat.facing_right = False; self.pig.facing_right = True
 
     def update(self, dt):
         for nav in (self.cat, self.pig):
@@ -537,12 +534,9 @@ class InWorldBattle:
             for p in platforms:
                 if nav.rect.colliderect(p):
                     if nav.vel_y >= 0:
-                        nav.rect.bottom = p.top
-                        nav.vel_y       = 0
-                        nav.on_ground   = True
+                        nav.rect.bottom = p.top; nav.vel_y = 0; nav.on_ground = True
                     else:
-                        nav.rect.top = p.bottom
-                        nav.vel_y    = 0
+                        nav.rect.top = p.bottom; nav.vel_y = 0
             nav.vel_x = 0.0
 
         if not still_on_same_platform(self.cat.rect, self.pig.rect):
@@ -564,22 +558,16 @@ class InWorldBattle:
                 if self.atk_phase == 0:
                     self.atk_phase = 1
                     self.anim_t    = self.PUNCH_FRAME_MS
-                    if self.atk_who == "cat":
-                        self.cat_override = cat_b_punch
-                    else:
-                        self.pig_override = pig_b_punch
-
+                    if self.atk_who == "cat": self.cat_override = cat_b_punch
+                    else:                     self.pig_override = pig_b_punch
                     if self.pend_hit:
                         txt, col = f"HIT  -{self.pend_dmg:.2f}", RED
                         if self.pend_def == "pig":
-                            self.pig_override = pig_b_flinch
-                            self.pig_shake    = 18
+                            self.pig_override = pig_b_flinch; self.pig_shake = 18
                         else:
-                            self.cat_override = cat_b_flinch
-                            self.cat_shake    = -18
+                            self.cat_override = cat_b_flinch; self.cat_shake = -18
                     else:
                         txt, col = "MISS", YELLOW
-
                     def_nav = self.pig if self.pend_def == "pig" else self.cat
                     self.popup = {
                         "text": txt, "colour": col,
@@ -616,23 +604,20 @@ class InWorldBattle:
         self.atk_phase = 0
         self.anim_t    = self.STANCE_FRAME_MS
         if self.atk_who == "cat":
-            self.cat_override = cat_b_stance
-            self.pig_override = None
+            self.cat_override = cat_b_stance; self.pig_override = None
         else:
-            self.cat_override = None
-            self.pig_override = pig_b_stance
+            self.cat_override = None;         self.pig_override = pig_b_stance
         self.pend_hit = ev["hit"]
         self.pend_dmg = ev["damage"]
         self.pend_def = ev["defender"]
 
     def draw(self):
-        # NEW: Skip drawing if both characters are completely off-screen
         if not (self.cat.is_visible() or self.pig.is_visible()):
             return
 
         pig_faces_left = self.pig.rect.centerx >= self.cat.rect.centerx
-        flip_map = {pig_b_idle: pig_b_idle_f, pig_b_stance: pig_b_stance_f,
-                    pig_b_punch: pig_b_punch_f, pig_b_flinch: pig_b_flinch_f}
+        flip_map = {pig_b_idle:   pig_b_idle_f,   pig_b_stance: pig_b_stance_f,
+                    pig_b_punch:  pig_b_punch_f,   pig_b_flinch: pig_b_flinch_f}
 
         raw_cat = self.cat_override if self.cat_override else cat_b_idle
         cat_img = raw_cat if self.cat.facing_right else pygame.transform.flip(raw_cat, True, False)
@@ -646,8 +631,8 @@ class InWorldBattle:
 
         BAR_W = HEALTH_BAR_W
         BAR_H = HEALTH_BAR_H
-        cat_bx = max(4, min(self.cat.rect.centerx - BAR_W//2, WIDTH - BAR_W - 4))
-        pig_bx = max(4, min(self.pig.rect.centerx - BAR_W//2, WIDTH - BAR_W - 4))
+        cat_bx = max(4, min(self.cat.rect.centerx - BAR_W // 2, WIDTH - BAR_W - 4))
+        pig_bx = max(4, min(self.pig.rect.centerx - BAR_W // 2, WIDTH - BAR_W - 4))
         cat_by = max(22, self.cat.rect.top - 36)
         pig_by = max(22, self.pig.rect.top - 36)
         draw_health_bar(cat_bx, cat_by, BAR_W, BAR_H, self.cat_hp, self.cat_max, "")
@@ -660,35 +645,29 @@ class InWorldBattle:
             surf.blit(font_med.render(self.popup["text"], True, (0, 0, 0, alpha)), (2, 2))
             surf.blit(font_med.render(self.popup["text"], True,
                                       (*self.popup["colour"], alpha)), (0, 0))
-            screen.blit(surf, (self.popup["wx"] - surf.get_width()//2,
+            screen.blit(surf, (self.popup["wx"] - surf.get_width() // 2,
                                 self.popup["wy"] - int(22 * frac)))
+
+
+# ─── SPAWN HELPERS ────────────────────────────────────────────────────────────
+def make_cat(x):
+    return Navigator(x, cat_nav_idle, cat_nav_walk, cat_nav_jump, face_right=True,  is_cat=True)
+
+def make_pig(x):
+    return Navigator(x, pig_nav_idle, pig_nav_walk, pig_nav_jump, face_right=False, is_cat=False)
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
-    cat_nav = Navigator(60,          cat_nav_idle, cat_nav_walk, cat_nav_jump, face_right=True,  is_cat=True)
-    pig_nav = Navigator(WIDTH - 100, pig_nav_idle, pig_nav_walk, pig_nav_jump, face_right=False, is_cat=False)
+    global bg_surface, platforms
+    bg_surface, platforms = generate_city()
 
-    battles      : list[InWorldBattle] = []
-    gore_pieces  : List[GorePiece]     = []
-    explosions   : List[Explosion]     = []
-
-    # ── BUTTON LAYOUT ───────────────────────────────────────────────────────────
-    # Horizontal layout with 100px spacing: Cat -- Both -- Pig, centered under game
-    BTN_SIZE = 110
-    GAP      = 100                    # 100 pixel space between each button
-    BTN_Y    = HEIGHT + 40            # vertical position of the entire button row
-
-    # Auto-calculate centered positions
-    total_width = BTN_SIZE * 3 + GAP * 2
-    start_x = (WIDTH - total_width) // 2
-
-    btn_cat  = pygame.Rect(start_x,                          BTN_Y, BTN_SIZE, BTN_SIZE)
-    btn_both = pygame.Rect(start_x + BTN_SIZE + GAP,         BTN_Y, BTN_SIZE, BTN_SIZE)
-    btn_pig  = pygame.Rect(start_x + (BTN_SIZE + GAP) * 2,   BTN_Y, BTN_SIZE, BTN_SIZE)
-
-    cats : list[Navigator] = [cat_nav]
-    pigs : list[Navigator] = [pig_nav]
+    cats        : list[Navigator]     = []
+    pigs        : list[Navigator]     = []
+    battles     : list[InWorldBattle] = []
+    gore_pieces : List[GorePiece]     = []
+    explosions  : List[Explosion]     = []
+    spawn_timer = 0
 
     while True:
         dt = clock.tick(FPS)
@@ -696,27 +675,30 @@ def main():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
-            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                mx, my = ev.pos
-                if btn_cat.collidepoint(mx, my):
-                    cats.append(Navigator(random.randint(40, WIDTH - 40),
-                                          cat_nav_idle, cat_nav_walk,
-                                          cat_nav_jump, face_right=True, is_cat=True))
-                if btn_pig.collidepoint(mx, my):
-                    pigs.append(Navigator(random.randint(40, WIDTH - 40),
-                                          pig_nav_idle, pig_nav_walk,
-                                          pig_nav_jump, face_right=False, is_cat=False))
-                if btn_both.collidepoint(mx, my):
-                    # Spawn one cat + one pig at random positions
-                    cats.append(Navigator(random.randint(40, WIDTH - 40),
-                                          cat_nav_idle, cat_nav_walk,
-                                          cat_nav_jump, face_right=True, is_cat=True))
-                    pigs.append(Navigator(random.randint(40, WIDTH - 40),
-                                          pig_nav_idle, pig_nav_walk,
-                                          pig_nav_jump, face_right=False, is_cat=False))
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                pygame.quit(); sys.exit()
+
+        # ── AUTO-SPAWN every SPAWN_INTERVAL ms ───────────────────────────────
+        spawn_timer += dt
+        if spawn_timer >= SPAWN_INTERVAL:
+            spawn_timer = 0
+            rx  = lambda: random.randint(40, WIDTH - 40)
+            nc, np_ = len(cats), len(pigs)
+            if nc == np_:
+                cats.append(make_cat(rx()))
+                pigs.append(make_pig(rx()))
+            elif nc > np_:
+                # losing side (pigs) gets one extra spawn
+                cats.append(make_cat(rx()))
+                pigs.append(make_pig(rx()))
+                pigs.append(make_pig(rx()))
+            else:
+                # losing side (cats) gets one extra spawn
+                cats.append(make_cat(rx()))
+                cats.append(make_cat(rx()))
+                pigs.append(make_pig(rx()))
 
         draw_bg()
-        draw_platforms()
 
         def fighting_ids():
             ids = set()
@@ -737,15 +719,13 @@ def main():
 
             if b.state == "done":
                 if b.winner in ("pig", "draw"):
-                    if b.cat in cats:
-                        cats.remove(b.cat)
+                    if b.cat in cats: cats.remove(b.cat)
                     cx, cy = b.cat.rect.centerx, b.cat.rect.centery
                     gore_pieces.extend(spawn_gore(cx, cy, count=12))
                     explosions.append(Explosion(cx, cy))
 
                 if b.winner in ("cat", "draw"):
-                    if b.pig in pigs:
-                        pigs.remove(b.pig)
+                    if b.pig in pigs: pigs.remove(b.pig)
                     cx, cy = b.pig.rect.centerx, b.pig.rect.centery
                     gore_pieces.extend(spawn_gore(cx, cy, count=12))
                     explosions.append(Explosion(cx, cy))
@@ -768,7 +748,7 @@ def main():
                 continue
             nav.ai_tick()
             nav.physics()
-            if nav.is_visible():   # ← This now works and skips invisible drawing
+            if nav.is_visible():
                 nav.draw_nav()
                 if nav.hp_max > 0:
                     BAR_W = HEALTH_BAR_W
@@ -790,41 +770,13 @@ def main():
                     busy.add(id(p))
                     break
 
-        for g in gore_pieces:
-            g.update(platforms)
-        for e in explosions:
-            e.update(gore_pieces)
+        for g in gore_pieces: g.update(platforms)
+        for e in explosions:  e.update(gore_pieces)
         gore_pieces = [g for g in gore_pieces if not g.is_dead()]
-        explosions  = [e for e in explosions if e.alive]
+        explosions  = [e for e in explosions  if e.alive]
 
-        for g in gore_pieces:
-            g.draw(screen)
-        for e in explosions:
-            e.draw(screen)
-
-        # ── UI AREA (underneath the game) ─────────────────────────────────────────
-        pygame.draw.rect(screen, DARK, (0, HEIGHT, WIDTH, UI_HEIGHT))   # dark UI strip
-
-        # Cat button (left)
-        pygame.draw.rect(screen, (230, 200, 40), btn_cat, border_radius=12)
-        pygame.draw.rect(screen, BLACK, btn_cat, 4, border_radius=12)
-        lbl_cat = font_med.render("+ Cat", True, BLACK)
-        screen.blit(lbl_cat, (btn_cat.centerx - lbl_cat.get_width()//2,
-                              btn_cat.centery - lbl_cat.get_height()//2))
-
-        # Both button (middle)
-        pygame.draw.rect(screen, (100, 220, 100), btn_both, border_radius=12)
-        pygame.draw.rect(screen, BLACK, btn_both, 4, border_radius=12)
-        lbl_both = font_med.render("+ Both", True, BLACK)
-        screen.blit(lbl_both, (btn_both.centerx - lbl_both.get_width()//2,
-                               btn_both.centery - lbl_both.get_height()//2))
-
-        # Pig button (right)
-        pygame.draw.rect(screen, (220, 80, 160), btn_pig, border_radius=12)
-        pygame.draw.rect(screen, BLACK, btn_pig, 4, border_radius=12)
-        lbl_pig = font_med.render("+ Pig", True, BLACK)
-        screen.blit(lbl_pig, (btn_pig.centerx - lbl_pig.get_width()//2,
-                              btn_pig.centery - lbl_pig.get_height()//2))
+        for g in gore_pieces: g.draw(screen)
+        for e in explosions:  e.draw(screen)
 
         pygame.display.flip()
 
