@@ -117,6 +117,13 @@ def generate_city():
     draw_layer(HEIGHT, int(280 * h_scale), int(400 * h_scale))
     draw_layer(HEIGHT, int(140 * h_scale), int(260 * h_scale))
 
+    # Greyscale gradient overlay: transparent at top, dark at bottom
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    for y in range(HEIGHT):
+        alpha = int((y / HEIGHT) * 180)
+        pygame.draw.line(overlay, (15, 15, 20, alpha), (0, y), (WIDTH, y))
+    screen.blit(overlay, (0, 0))
+
 generate_city()
 pygame.display.flip()
 

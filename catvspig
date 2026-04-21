@@ -179,6 +179,14 @@ def generate_city():
     roofs_l3 = draw_layer(surface, HEIGHT, int(420 * h_scale), int(540 * h_scale))
     roofs_l4 = draw_layer(surface, HEIGHT, int(280 * h_scale), int(400 * h_scale))
     roofs_l5 = draw_layer(surface, HEIGHT, int(140 * h_scale), int(260 * h_scale))
+
+    # Greyscale gradient overlay: transparent at top, dark at bottom
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    for y in range(HEIGHT):
+        alpha = int((y / HEIGHT) * 180)
+        pygame.draw.line(overlay, (15, 15, 20, alpha), (0, y), (WIDTH, y))
+    surface.blit(overlay, (0, 0))
+
     plats = [
         pygame.Rect(-20,    0, 20,     HEIGHT),         # 0: left wall
         pygame.Rect(WIDTH,  0, 20,     HEIGHT),         # 1: right wall
