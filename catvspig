@@ -11,11 +11,8 @@ FPS            = 60
 GRAVITY        = 0.85
 JUMP_POWER     = -17
 MOVE_SPEED     = 4.0
-NAV_H          = 10           # 1/8th of original 80
+NAV_H          = 40           # 1/2 of original 80
 SPAWN_INTERVAL = 5000          # ms between auto-spawn cycles
-
-HEALTH_BAR_W = 9              # scaled with sprite size
-HEALTH_BAR_H = 2
 
 # City generation reference resolution
 BASE_WIDTH  = 900
@@ -175,16 +172,18 @@ def draw_layer(surface, y_base, min_h, max_h):
 def generate_city():
     surface = pygame.Surface((WIDTH, HEIGHT))
     surface.fill(SKY_COLOR)
-    # Back layer: tall buildings
-    bg_roofs = draw_layer(surface, HEIGHT, int(260 * h_scale), int(820 * h_scale))
-    # Front layer: buildings roughly half the height, drawn on top
-    fg_roofs = draw_layer(surface, HEIGHT, int(130 * h_scale), int(410 * h_scale))
+    # Five layers, each ~140px shorter than the previous, drawn back-to-front.
+    # Roof heights stay within one jump of each other so NPCs can navigate up/down.
+    roofs_l1 = draw_layer(surface, HEIGHT, int(700 * h_scale), int(820 * h_scale))
+    roofs_l2 = draw_layer(surface, HEIGHT, int(560 * h_scale), int(680 * h_scale))
+    roofs_l3 = draw_layer(surface, HEIGHT, int(420 * h_scale), int(540 * h_scale))
+    roofs_l4 = draw_layer(surface, HEIGHT, int(280 * h_scale), int(400 * h_scale))
+    roofs_l5 = draw_layer(surface, HEIGHT, int(140 * h_scale), int(260 * h_scale))
     plats = [
-        pygame.Rect(-20,    0, 20,     HEIGHT),   # 0: left wall
-        pygame.Rect(WIDTH,  0, 20,     HEIGHT),   # 1: right wall
-        pygame.Rect(0, HEIGHT - 40, WIDTH, 40),   # 2: floor safety net
-        *bg_roofs,                                 # 3+: back-layer rooftops
-        *fg_roofs,                                 # front-layer rooftops
+        pygame.Rect(-20,    0, 20,     HEIGHT),         # 0: left wall
+        pygame.Rect(WIDTH,  0, 20,     HEIGHT),         # 1: right wall
+        pygame.Rect(0, HEIGHT - 40, WIDTH, 40),         # 2: floor safety net
+        *roofs_l1, *roofs_l2, *roofs_l3, *roofs_l4, *roofs_l5,
     ]
     return surface, plats
 
@@ -353,7 +352,7 @@ class Explosion:
 
 
 def _load_gore_imgs():
-    sizes = [(2, 2), (3, 3), (2, 2), (3, 3)]   # 1/8th of original sizes
+    sizes = [(7, 7), (12, 12), (7, 7), (10, 10)]   # 1/2 of original sizes
     imgs  = []
     for i, (w, h) in enumerate(sizes, start=1):
         path = os.path.join(sp, f"gore{i}.png")
@@ -509,9 +508,7 @@ class InWorldBattle:
         self.atk_phase = 0
         self.anim_t    = 0
         self.pend_hit  = False
-        self.pend_dmg  = 0.0
         self.pend_def  = None
-        self.popup     = None
 
         self._face_each_other()
 
@@ -556,31 +553,16 @@ class InWorldBattle:
                     if self.atk_who == "cat": self.cat_override = cat_b_punch
                     else:                     self.pig_override = pig_b_punch
                     if self.pend_hit:
-                        txt, col = f"HIT  -{self.pend_dmg:.2f}", RED
                         if self.pend_def == "pig":
                             self.pig_override = pig_b_flinch; self.pig_shake = 18
                         else:
                             self.cat_override = cat_b_flinch; self.cat_shake = -18
-                    else:
-                        txt, col = "MISS", YELLOW
-                    def_nav = self.pig if self.pend_def == "pig" else self.cat
-                    self.popup = {
-                        "text": txt, "colour": col,
-                        "wx":   def_nav.rect.centerx,
-                        "wy":   def_nav.rect.top - 28,
-                        "age": 0, "duration": self.STEP_DELAY - 80,
-                    }
                 else:
                     self.cat_override = None
                     self.pig_override = None
                     self.atk_who      = None
                     self.atk_phase    = 0
                     self.pend_hit     = False
-
-        if self.popup:
-            self.popup["age"] += dt
-            if self.popup["age"] > self.popup["duration"]:
-                self.popup = None
 
         self.timer += dt
         if self.timer >= self.STEP_DELAY:
@@ -603,7 +585,6 @@ class InWorldBattle:
         else:
             self.cat_override = None;         self.pig_override = pig_b_stance
         self.pend_hit = ev["hit"]
-        self.pend_dmg = ev["damage"]
         self.pend_def = ev["defender"]
 
     def draw(self):
@@ -623,25 +604,6 @@ class InWorldBattle:
         if not pig_faces_left:
             pig_faced = pygame.transform.flip(pig_faced, True, False)
         screen.blit(pig_faced, (self.pig.rect.x + self.pig_shake, self.pig.rect.y))
-
-        BAR_W = HEALTH_BAR_W
-        BAR_H = HEALTH_BAR_H
-        cat_bx = max(4, min(self.cat.rect.centerx - BAR_W // 2, WIDTH - BAR_W - 4))
-        pig_bx = max(4, min(self.pig.rect.centerx - BAR_W // 2, WIDTH - BAR_W - 4))
-        cat_by = max(22, self.cat.rect.top - 36)
-        pig_by = max(22, self.pig.rect.top - 36)
-        draw_health_bar(cat_bx, cat_by, BAR_W, BAR_H, self.cat_hp, self.cat_max, "")
-        draw_health_bar(pig_bx, pig_by, BAR_W, BAR_H, self.pig_hp, self.pig_max, "")
-
-        if self.popup:
-            frac  = self.popup["age"] / max(1, self.popup["duration"])
-            alpha = max(0, int(255 * (1.0 - frac)))
-            surf  = pygame.Surface((220, 32), pygame.SRCALPHA)
-            surf.blit(font_med.render(self.popup["text"], True, (0, 0, 0, alpha)), (2, 2))
-            surf.blit(font_med.render(self.popup["text"], True,
-                                      (*self.popup["colour"], alpha)), (0, 0))
-            screen.blit(surf, (self.popup["wx"] - surf.get_width() // 2,
-                                self.popup["wy"] - int(22 * frac)))
 
 
 # ─── SPAWN HELPERS ────────────────────────────────────────────────────────────
@@ -745,12 +707,6 @@ def main():
             nav.physics()
             if nav.is_visible():
                 nav.draw_nav()
-                if nav.hp_max > 0:
-                    BAR_W = HEALTH_BAR_W
-                    BAR_H = HEALTH_BAR_H
-                    bx = max(4, min(nav.rect.centerx - BAR_W // 2, WIDTH - BAR_W - 4))
-                    by = max(22, nav.rect.top - 36)
-                    draw_health_bar(bx, by, BAR_W, BAR_H, nav.hp, nav.hp_max, "")
 
         busy = fighting_ids()
         for c in cats:
