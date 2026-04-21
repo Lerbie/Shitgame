@@ -7,22 +7,19 @@ import time
 from typing import List
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-WIDTH, HEIGHT  = 1080, 540
 FPS            = 60
 GRAVITY        = 0.85
 JUMP_POWER     = -17
 MOVE_SPEED     = 4.0
-NAV_H          = 80
+NAV_H          = 10           # 1/8th of original 80
 SPAWN_INTERVAL = 5000          # ms between auto-spawn cycles
 
-HEALTH_BAR_W = 72
-HEALTH_BAR_H = 10
+HEALTH_BAR_W = 9              # scaled with sprite size
+HEALTH_BAR_H = 2
 
-# City generation scaling (reference 900×1100)
+# City generation reference resolution
 BASE_WIDTH  = 900
 BASE_HEIGHT = 1100
-w_scale = WIDTH  / BASE_WIDTH
-h_scale = HEIGHT / BASE_HEIGHT
 
 # ─── COLOURS ──────────────────────────────────────────────────────────────────
 WHITE  = (255, 255, 255)
@@ -53,8 +50,11 @@ PIG_STATS = dict(
 
 # ─── INIT ─────────────────────────────────────────────────────────────────────
 pygame.init()
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 pygame.display.set_caption("Cat & Pig Adventure")
+WIDTH, HEIGHT = screen.get_size()
+w_scale = WIDTH  / BASE_WIDTH
+h_scale = HEIGHT / BASE_HEIGHT
 clock = pygame.time.Clock()
 
 font_big   = pygame.font.SysFont("monospace", 28, bold=True)
@@ -158,7 +158,7 @@ def draw_building(surface, x, base_y, width, height):
             pygame.draw.rect(surface, color,
                              (sx, top_y - t1h - t2h - sh, sw, sh))
 
-    return pygame.Rect(x, base_y - height, width, 8)   # roof platform
+    return pygame.Rect(x, base_y - height, width, 40)   # roof platform (thick to prevent tunneling)
 
 
 def draw_layer(surface, y_base, min_h, max_h):
@@ -175,12 +175,16 @@ def draw_layer(surface, y_base, min_h, max_h):
 def generate_city():
     surface = pygame.Surface((WIDTH, HEIGHT))
     surface.fill(SKY_COLOR)
-    roofs = draw_layer(surface, HEIGHT, int(260 * h_scale), int(820 * h_scale))
+    # Back layer: tall buildings
+    bg_roofs = draw_layer(surface, HEIGHT, int(260 * h_scale), int(820 * h_scale))
+    # Front layer: buildings roughly half the height, drawn on top
+    fg_roofs = draw_layer(surface, HEIGHT, int(130 * h_scale), int(410 * h_scale))
     plats = [
         pygame.Rect(-20,    0, 20,     HEIGHT),   # 0: left wall
         pygame.Rect(WIDTH,  0, 20,     HEIGHT),   # 1: right wall
-        pygame.Rect(0, HEIGHT - 2, WIDTH, 2),     # 2: floor safety net
-        *roofs,                                    # 3+: building rooftops
+        pygame.Rect(0, HEIGHT - 40, WIDTH, 40),   # 2: floor safety net
+        *bg_roofs,                                 # 3+: back-layer rooftops
+        *fg_roofs,                                 # front-layer rooftops
     ]
     return surface, plats
 
@@ -200,7 +204,8 @@ def draw_health_bar(x, y, w, h, current, maximum, name):
 
 # ─── PLATFORM COLLISION HELPERS ───────────────────────────────────────────────
 def get_platform_index(rect):
-    probe = pygame.Rect(rect.x + 4, rect.bottom, rect.w - 8, 4)
+    inset = min(4, max(1, rect.w // 4))
+    probe = pygame.Rect(rect.x + inset, rect.bottom, max(2, rect.w - inset * 2), 4)
     for i, p in enumerate(platforms):
         if i in (0, 1):          # skip left/right walls
             continue
@@ -344,31 +349,21 @@ class Explosion:
                 obj.vy += (dy / dist) * force * 13.5
 
     def draw(self, surface):
-        if not self.alive:
-            return
-        r = int(self.radius)
-        cx, cy = int(self.x), int(self.y)
-        if cx + r < 0 or cx - r > WIDTH or cy + r < 0 or cy - r > HEIGHT:
-            return
-        old_clip = surface.get_clip()
-        surface.set_clip(pygame.Rect(0, 0, WIDTH, HEIGHT))
-        pygame.draw.circle(surface, (255, 140, 30), (cx, cy), r, 3)
-        pygame.draw.circle(surface, (255,  80, 20), (cx, cy), int(self.radius * 0.6), 2)
-        surface.set_clip(old_clip)
+        pass   # visual ellipse removed; physics still applied via update()
 
 
 def _load_gore_imgs():
-    sizes = [(14, 14), (24, 24), (14, 14), (20, 20)]
+    sizes = [(2, 2), (3, 3), (2, 2), (3, 3)]   # 1/8th of original sizes
     imgs  = []
     for i, (w, h) in enumerate(sizes, start=1):
         path = os.path.join(sp, f"gore{i}.png")
         try:
             img = pygame.image.load(path).convert_alpha()
-            imgs.append(pygame.transform.scale(img, (w, h)))
+            imgs.append(to_grayscale(pygame.transform.scale(img, (w, h))))
         except Exception:
             surf = pygame.Surface((w, h), pygame.SRCALPHA)
             pygame.draw.rect(surf, (200, 30, 30, 200), surf.get_rect(), border_radius=3)
-            imgs.append(surf)
+            imgs.append(to_grayscale(surf))
     return imgs
 
 GORE_IMGS = _load_gore_imgs()
