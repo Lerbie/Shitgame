@@ -109,13 +109,13 @@ def draw_layer(y_base, min_h, max_h):
 def generate_city():
     screen.fill(SKY_COLOR)
 
-    # === UPDATED: Max height increased ===
-    # Previous max was \~65-70% of screen height.
-    # Now raised to \~74-80% of screen height (base value 820 instead of 720).
-    # This makes the tallest buildings noticeably taller while still leaving
-    # a good amount of dark sky above (exactly as requested: "a bit higher").
-    # All spires and triangle roofs scale automatically with the new height.
-    draw_layer(HEIGHT, int(260 * h_scale), int(820 * h_scale))
+    # Five layers drawn back-to-front, each ~140px shorter than the previous.
+    # Roof heights stay within one jump of each other for visual continuity.
+    draw_layer(HEIGHT, int(700 * h_scale), int(820 * h_scale))
+    draw_layer(HEIGHT, int(560 * h_scale), int(680 * h_scale))
+    draw_layer(HEIGHT, int(420 * h_scale), int(540 * h_scale))
+    draw_layer(HEIGHT, int(280 * h_scale), int(400 * h_scale))
+    draw_layer(HEIGHT, int(140 * h_scale), int(260 * h_scale))
 
 generate_city()
 pygame.display.flip()
